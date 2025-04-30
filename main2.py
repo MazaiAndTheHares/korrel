@@ -1,19 +1,18 @@
 import sys
-import pandas as pd
 import numpy as np
+import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QTableWidget, 
                              QTableWidgetItem, QVBoxLayout, QWidget, QPushButton, 
                              QFileDialog, QComboBox, QLabel, QMessageBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 import scipy.stats as stats
-from sklearn.preprocessing import LabelEncoder
 
 class CorrelationApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Анализ корреляций с проверкой значимости")
-        self.setGeometry(100, 100, 1000, 800)
+        self.setWindowTitle("Анализ корреляций (матричные методы)")
+        self.setGeometry(100, 100, 1200, 900)
         
         self.data = None
         self.var_types = {}
@@ -42,7 +41,7 @@ class CorrelationApp(QMainWindow):
         self.tabs.addTab(self.tab1, "Данные")
         self.tabs.addTab(self.tab2, "Парные корреляции")
         self.tabs.addTab(self.tab3, "Частные корреляции")
-        self.tabs.addTab(self.tab4, "Множественные корреляции")
+        self.tabs.addTab(self.tab4, "Множественные R²")
         self.setCentralWidget(self.tabs)
     
     def setup_tab1(self):
@@ -52,6 +51,7 @@ class CorrelationApp(QMainWindow):
         self.btn_load.clicked.connect(self.load_data)
         self.btn_process = QPushButton("Рассчитать корреляции")
         self.btn_process.clicked.connect(self.process_data)
+        
         layout.addWidget(self.btn_load)
         layout.addWidget(QLabel("Укажите тип каждой переменной:"))
         layout.addWidget(self.table_data)
@@ -61,21 +61,21 @@ class CorrelationApp(QMainWindow):
     def setup_tab2(self):
         layout = QVBoxLayout()
         self.table_pairwise = QTableWidget()
-        layout.addWidget(QLabel("Парные корреляции (значимые p < 0.05 выделены):"))
+        layout.addWidget(QLabel("Парные корреляции (p < 0.05 выделены):"))
         layout.addWidget(self.table_pairwise)
         self.tab2.setLayout(layout)
     
     def setup_tab3(self):
         layout = QVBoxLayout()
         self.table_partial = QTableWidget()
-        layout.addWidget(QLabel("Частные корреляции (значимые p < 0.05 выделены):"))
+        layout.addWidget(QLabel("Частные корреляции (матричный метод):"))
         layout.addWidget(self.table_partial)
         self.tab3.setLayout(layout)
     
     def setup_tab4(self):
         layout = QVBoxLayout()
         self.table_multiple = QTableWidget()
-        layout.addWidget(QLabel("Множественные корреляции (значимые p < 0.05 выделены):"))
+        layout.addWidget(QLabel("Множественные R² (значимые p < 0.05):"))
         layout.addWidget(self.table_multiple)
         self.tab4.setLayout(layout)
     
@@ -85,18 +85,21 @@ class CorrelationApp(QMainWindow):
             try:
                 self.data = pd.read_csv(file_path)
                 self.update_table_data()
-                QMessageBox.information(self, "Успех", "Данные успешно загружены!")
+                QMessageBox.information(self, "Успех", "Данные загружены!")
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
+                QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки:\n{str(e)}")
     
     def update_table_data(self):
         if self.data is not None:
             self.table_data.setRowCount(len(self.data.columns))
             self.table_data.setColumnCount(2)
             self.table_data.setHorizontalHeaderLabels(["Переменная", "Тип"])
+            self.table_data.setColumnWidth(0, 250)
+            self.table_data.setColumnWidth(1, 150)
             
             for i, col in enumerate(self.data.columns):
                 self.table_data.setItem(i, 0, QTableWidgetItem(col))
+                
                 combo = QComboBox()
                 combo.addItems(["Количественный", "Качественный", "Порядковый"])
                 combo.setCurrentIndex(0)
@@ -113,7 +116,7 @@ class CorrelationApp(QMainWindow):
             return
         
         if self.data.isnull().any().any():
-            reply = QMessageBox.question(self, "Пропущенные значения", 
+            reply = QMessageBox.question(self, "Пропуски", 
                                        "Удалить строки с пропусками?", 
                                        QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
@@ -129,22 +132,6 @@ class CorrelationApp(QMainWindow):
             data = data.sample(5000)
         stat, p = stats.shapiro(data)
         return p > threshold
-    
-    def calculate_significance(self, corr, n, method='pearson'):
-        """Проверка значимости корреляции с помощью t-критерия Стьюдента"""
-        if np.isnan(corr):
-            return 1.0
-        
-        if method == 'pearson':
-            df = n - 2
-            t_value = corr * np.sqrt(df / (1 - corr**2))
-            p_value = 2 * (1 - stats.t.cdf(abs(t_value), df))
-        else:  # Для непараметрических корреляций
-            z = np.arctanh(corr)
-            se = 1 / np.sqrt(n - 3)
-            p_value = 2 * (1 - stats.norm.cdf(abs(z / se)))
-        
-        return p_value
     
     def calculate_correlation(self, var1, var2):
         type1 = self.var_types[var1]
@@ -209,19 +196,35 @@ class CorrelationApp(QMainWindow):
         
         return corr, p_value, method
     
+    def calculate_significance(self, corr, n, method='pearson'):
+        """Проверка значимости корреляции через t-тест Стьюдента"""
+        if np.isnan(corr):
+            return 1.0
+        
+        if method == 'pearson':
+            df = n - 2
+            t_value = corr * np.sqrt(df / (1 - corr**2))
+            p_value = 2 * (1 - stats.t.cdf(abs(t_value), df))
+        else:
+            z = np.arctanh(corr)
+            se = 1 / np.sqrt(n - 3)
+            p_value = 2 * (1 - stats.norm.cdf(abs(z / se)))
+        
+        return p_value
+    
     def calculate_pairwise(self):
         if self.data is None:
             return
         
         cols = self.data.columns
-        n_cols = len(cols)
-        self.table_pairwise.setRowCount(n_cols)
-        self.table_pairwise.setColumnCount(n_cols)
+        n = len(cols)
+        self.table_pairwise.setRowCount(n)
+        self.table_pairwise.setColumnCount(n)
         self.table_pairwise.setHorizontalHeaderLabels(cols)
         self.table_pairwise.setVerticalHeaderLabels(cols)
         
-        for i in range(n_cols):
-            for j in range(n_cols):
+        for i in range(n):
+            for j in range(n):
                 if i == j:
                     item = QTableWidgetItem("1.0 (—)")
                     item.setBackground(QColor(240, 240, 240))
@@ -235,8 +238,6 @@ class CorrelationApp(QMainWindow):
                             item = QTableWidgetItem(f"{corr:.3f} ({method})")
                             if p_value < 0.05:
                                 item.setBackground(QColor(255, 200, 200))
-                            else:
-                                item.setBackground(QColor(255, 255, 255))
                     except Exception as e:
                         item = QTableWidgetItem("Ошибка")
                         print(f"Ошибка при расчете {var1} и {var2}: {str(e)}")
@@ -246,90 +247,108 @@ class CorrelationApp(QMainWindow):
         self.table_pairwise.resizeColumnsToContents()
     
     def calculate_partial(self):
-        """Упрощенная реализация частных корреляций"""
+        """Точный расчет частных корреляций через обратную ковариационную матрицу"""
         if self.data is None:
             return
-        
-        cols = [col for col in self.data.columns if self.var_types[col] == "Количественный"]
-        if len(cols) < 3:
+
+        quant_cols = [col for col in self.data.columns if self.var_types[col] == "Количественный"]
+        if len(quant_cols) < 2:
             self.table_partial.setRowCount(1)
             self.table_partial.setColumnCount(1)
-            self.table_partial.setItem(0, 0, QTableWidgetItem("Нужно ≥3 количественных переменных"))
+            self.table_partial.setItem(0, 0, QTableWidgetItem("Требуется ≥2 количественных переменных"))
             return
+
+        # Матричный расчет
+        X = self.data[quant_cols].values
+        X_centered = X - X.mean(axis=0)
+        cov_matrix = np.cov(X_centered, rowvar=False)
         
-        n = len(cols)
+        try:
+            precision_matrix = np.linalg.pinv(cov_matrix)
+            diag = np.diag(precision_matrix)
+            partial_corrs = -precision_matrix / np.sqrt(np.outer(diag, diag))
+            np.fill_diagonal(partial_corrs, 1.0)
+        except np.linalg.LinAlgError:
+            QMessageBox.warning(self, "Ошибка", "Не удалось вычислить частные корреляции")
+            return
+
+        # Отображение результатов
+        n = len(quant_cols)
         self.table_partial.setRowCount(n)
         self.table_partial.setColumnCount(n)
-        self.table_partial.setHorizontalHeaderLabels(cols)
-        self.table_partial.setVerticalHeaderLabels(cols)
-        
+        self.table_partial.setHorizontalHeaderLabels(quant_cols)
+        self.table_partial.setVerticalHeaderLabels(quant_cols)
+
         for i in range(n):
             for j in range(n):
-                if i == j:
-                    item = QTableWidgetItem("1.0")
-                    item.setBackground(QColor(240, 240, 240))
-                else:
-                    x = cols[i]
-                    y = cols[j]
-                    z = [col for col in cols if col not in [x, y]]
-                    
-                    try:
-                        # Упрощенный расчет через остатки регрессии
-                        from sklearn.linear_model import LinearRegression
-                        lr_x = LinearRegression().fit(self.data[z], self.data[x])
-                        lr_y = LinearRegression().fit(self.data[z], self.data[y])
-                        res_x = self.data[x] - lr_x.predict(self.data[z])
-                        res_y = self.data[y] - lr_y.predict(self.data[z])
-                        
-                        corr, p_value = stats.pearsonr(res_x, res_y)
-                        item = QTableWidgetItem(f"{corr:.3f}")
-                        if p_value < 0.05:
-                            item.setBackground(QColor(255, 200, 200))
-                    except:
-                        item = QTableWidgetItem("—")
+                corr = partial_corrs[i, j]
+                item = QTableWidgetItem(f"{corr:.3f}")
+                
+                # Проверка значимости
+                df = len(self.data) - len(quant_cols)
+                t_val = corr * np.sqrt(df / (1 - corr**2))
+                p_val = 2 * (1 - stats.t.cdf(abs(t_val), df))
+                
+                if p_val < 0.05:
+                    item.setBackground(QColor(255, 200, 200))
                 
                 self.table_partial.setItem(i, j, item)
-        
+
         self.table_partial.resizeColumnsToContents()
     
     def calculate_multiple(self):
-        """Упрощенная реализация множественной корреляции (R²)"""
+        """Расчет множественных R² через проекционные матрицы"""
         if self.data is None:
             return
-        
+
         quant_cols = [col for col in self.data.columns if self.var_types[col] == "Количественный"]
         if len(quant_cols) < 2:
             self.table_multiple.setRowCount(1)
             self.table_multiple.setColumnCount(1)
-            self.table_multiple.setItem(0, 0, QTableWidgetItem("Нужно ≥2 количественных переменных"))
+            self.table_multiple.setItem(0, 0, QTableWidgetItem("Требуется ≥2 количественных переменных"))
             return
-        
-        self.table_multiple.setRowCount(len(quant_cols))
+
+        X = self.data[quant_cols].values
+        X_centered = X - X.mean(axis=0)
+        n_vars = X.shape[1]
+
+        # Матричный расчет R²
+        r_squared = np.zeros(n_vars)
+        p_values = np.zeros(n_vars)
+
+        for i in range(n_vars):
+            y = X_centered[:, i]
+            X_other = np.delete(X_centered, i, axis=1)
+            
+            # Проекционная матрица
+            H = X_other @ np.linalg.pinv(X_other.T @ X_other) @ X_other.T
+            y_pred = H @ y
+            ss_total = np.sum(y**2)
+            ss_res = np.sum((y - y_pred)**2)
+            r_squared[i] = 1 - (ss_res / ss_total)
+            
+            # F-тест
+            n = X.shape[0]
+            p = X_other.shape[1]
+            f_val = (r_squared[i] / p) / ((1 - r_squared[i]) / (n - p - 1))
+            p_values[i] = 1 - stats.f.cdf(f_val, p, n - p - 1)
+
+        # Отображение
+        self.table_multiple.setRowCount(n_vars)
         self.table_multiple.setColumnCount(2)
         self.table_multiple.setHorizontalHeaderLabels(["Переменная", "R²"])
+        self.table_multiple.setColumnWidth(0, 200)
+        self.table_multiple.setColumnWidth(1, 100)
         
-        from sklearn.linear_model import LinearRegression
-        for i, target in enumerate(quant_cols):
-            predictors = [col for col in quant_cols if col != target]
-            lr = LinearRegression().fit(self.data[predictors], self.data[target])
-            r_squared = lr.score(self.data[predictors], self.data[target])
+        for i in range(n_vars):
+            item_var = QTableWidgetItem(quant_cols[i])
+            item_r2 = QTableWidgetItem(f"{r_squared[i]:.3f}")
             
-            item_var = QTableWidgetItem(target)
-            item_r2 = QTableWidgetItem(f"{r_squared:.3f}")
-            
-            # Проверка значимости модели через F-тест
-            n = len(self.data)
-            p = len(predictors)
-            f_value = (r_squared / p) / ((1 - r_squared) / (n - p - 1))
-            p_value = 1 - stats.f.cdf(f_value, p, n - p - 1)
-            
-            if p_value < 0.05:
+            if p_values[i] < 0.05:
                 item_r2.setBackground(QColor(255, 200, 200))
             
             self.table_multiple.setItem(i, 0, item_var)
             self.table_multiple.setItem(i, 1, item_r2)
-        
-        self.table_multiple.resizeColumnsToContents()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
